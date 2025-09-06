@@ -1,11 +1,14 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { scoreboardState } from "../utils/scoreboardState";
-import { Settings, Play, Pause, SkipForward } from "lucide-react";
+import { Settings, Play, Pause, SkipForward, Bell } from "lucide-react";
+import timeSound from "../assets/sound/time.mp3";
 
 export default function ControlScreen() {
   const [scoreboardData, setScoreboardData] = useState(
     scoreboardState.getState()
   );
+  const audioRef = useRef(null); // <-- buzzer audio ref
+  const buzzerTimer = useRef(null); // <-- to manage stopping at 4s
 
   // Settings modal (temp values)
   const [showSettings, setShowSettings] = useState(false);
@@ -50,6 +53,138 @@ export default function ControlScreen() {
       clearInterval(interval);
     };
   }, []);
+
+  // cleanup buzzer timer on unmount
+  useEffect(() => {
+    return () => {
+      if (buzzerTimer.current) {
+        clearTimeout(buzzerTimer.current);
+        buzzerTimer.current = null;
+      }
+      if (audioRef.current) {
+        try {
+          audioRef.current.pause();
+          audioRef.current.currentTime = 0;
+        } catch (e) {
+          /* ignore */
+        }
+      }
+    };
+  }, []);
+
+  // Play buzzer segment from 1s to 4s (stop after 3s)
+  const playBuzzerSegment = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    // If a segment is already playing, stop it
+    if (buzzerTimer.current) {
+      clearTimeout(buzzerTimer.current);
+      buzzerTimer.current = null;
+      try {
+        audio.pause();
+        audio.currentTime = 0;
+      } catch (e) {
+        console.log("Error stopping buzzer:", e);
+      }
+      return;
+    }
+
+    const startSec = 1;
+    const endSec = 4;
+    const msDuration = (endSec - startSec) * 1000;
+
+    const startAndPlay = () => {
+      try {
+        // jump to start and play
+        audio.currentTime = startSec;
+        const playPromise = audio.play();
+        if (playPromise && typeof playPromise.catch === "function") {
+          playPromise.catch((e) => {
+            // Play may fail due to autoplay policy; log but still schedule stop
+            console.log("Play failed:", e);
+          });
+        }
+      } catch (e) {
+        console.log("Audio play error:", e);
+      }
+
+      // schedule stop after the duration
+      buzzerTimer.current = setTimeout(() => {
+        try {
+          audio.pause();
+          audio.currentTime = 0;
+        } catch (e) {
+          console.log("Error pausing buzzer:", e);
+        }
+        buzzerTimer.current = null;
+      }, msDuration);
+    };
+
+    // If metadata not loaded, wait for it
+    if (audio.readyState > 0) {
+      startAndPlay();
+    } else {
+      const onLoaded = () => {
+        audio.removeEventListener("loadedmetadata", onLoaded);
+        startAndPlay();
+      };
+      audio.addEventListener("loadedmetadata", onLoaded);
+      // also attempt to load
+      try {
+        audio.load();
+      } catch (e) {
+        // ignore
+      }
+    }
+  };
+
+  // --- New: mouse equivalents for Space and Ctrl keyboard shortcuts ---
+  // Space behavior: if both running -> stop both; else toggle game clock
+  const handleSpaceClick = () => {
+    const { gameTime, shotClock, now } = scoreboardState.getCurrentTimes();
+    const st = scoreboardState.getState();
+
+    if (st.isRunning && st.isShotRunning) {
+      scoreboardState.updateState({
+        isRunning: false,
+        isShotRunning: false,
+        gameTime,
+        shotClock,
+        lastUpdate: now,
+      });
+    } else {
+      scoreboardState.updateState({
+        isRunning: !st.isRunning,
+        gameTime,
+        shotClock,
+        lastUpdate: now,
+      });
+    }
+  };
+
+  // Ctrl behavior: if both off -> start both; else toggle shot clock
+  const handleCtrlClick = () => {
+    const { gameTime, shotClock, now } = scoreboardState.getCurrentTimes();
+    const st = scoreboardState.getState();
+
+    if (!st.isRunning && !st.isShotRunning) {
+      scoreboardState.updateState({
+        isRunning: true,
+        isShotRunning: true,
+        gameTime,
+        shotClock,
+        lastUpdate: now,
+      });
+    } else {
+      scoreboardState.updateState({
+        isShotRunning: !st.isShotRunning,
+        gameTime,
+        shotClock,
+        lastUpdate: now,
+      });
+    }
+  };
 
   // Helpers
   const pad = (n) => String(n).padStart(2, "0");
@@ -312,6 +447,19 @@ export default function ControlScreen() {
             <div className="text-2xl font-bold">Q{scoreboardData.quarter}</div>
           </div>
 
+          {/* Manual buzzer button (uses same sound file as display) */}
+          <div className="flex items-center">
+            <audio ref={audioRef} src={timeSound} preload="auto" />
+            <button
+              onClick={playBuzzerSegment}
+              className="flex items-center gap-2 px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700 mr-2"
+              title="Play buzzer segment (1s → 4s)"
+            >
+              <Bell className="w-5 h-5" />
+              Buzzer
+            </button>
+          </div>
+
           <button
             className="p-2 bg-gray-700 rounded hover:bg-gray-600"
             onClick={openSettings}
@@ -414,11 +562,12 @@ export default function ControlScreen() {
           >
             {formatTime(scoreboardData.gameTime)}
           </p>
+          {/* START button now uses Space-equivalent mouse handler */}
           <button
             className={`mt-2 ${
               scoreboardData.isRunning ? "bg-red-600" : "bg-blue-600"
             } px-4 py-2 rounded`}
-            onClick={() => scoreboardState.toggleGameClock()}
+            onClick={handleSpaceClick}
           >
             {scoreboardData.isRunning ? "Pause" : "Start"}
           </button>
@@ -436,11 +585,12 @@ export default function ControlScreen() {
           </p>
 
           <div className="mt-2 flex gap-2 justify-center">
+            {/* START button now uses Ctrl-equivalent mouse handler */}
             <button
               className={`mt-2 ${
                 scoreboardData.isShotRunning ? "bg-red-600" : "bg-blue-600"
               } px-4 py-2 rounded`}
-              onClick={() => scoreboardState.toggleShotClock()}
+              onClick={handleCtrlClick}
             >
               {scoreboardData.isShotRunning ? "Pause" : "Start"}
             </button>
@@ -616,7 +766,7 @@ export default function ControlScreen() {
         </button>
       </div>
 
-      {/* Confirm next quarter */}
+      {/* Followed by confirm modal, settings modal, edit modals... */}
       {confirmNext && (
         <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
           <div className="bg-white text-black p-6 rounded-lg w-80">
@@ -643,7 +793,6 @@ export default function ControlScreen() {
         </div>
       )}
 
-      {/* Settings modal */}
       {showSettings && (
         <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
           <div className="bg-white text-black p-6 rounded-lg w-96 max-h-screen overflow-y-auto">
@@ -763,7 +912,6 @@ export default function ControlScreen() {
         </div>
       )}
 
-      {/* Edit game clock modal */}
       {editingClock === "game" && (
         <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
           <div className="bg-white text-black p-6 rounded-lg w-80">
@@ -824,7 +972,6 @@ export default function ControlScreen() {
         </div>
       )}
 
-      {/* Edit shot clock modal */}
       {editingClock === "shot" && (
         <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
           <div className="bg-white text-black p-6 rounded-lg w-72">

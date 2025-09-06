@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { scoreboardState } from "../utils/scoreboardState";
 import timeSound from "../assets/sound/time.mp3";
 
@@ -7,24 +7,220 @@ export default function DisplayScreen() {
     scoreboardState.getState()
   );
   const [lastUpdate, setLastUpdate] = useState(0);
-  const audioRef = useRef(null);
-  const prevShot = useRef(scoreboardData.shotClock);
 
+  // HTMLAudio fallback element
+  const audioElRef = useRef(null);
+
+  // WebAudio objects
+  const audioCtxRef = useRef(null);
+  const audioBufferRef = useRef(null);
+  const sourceRef = useRef(null);
+  const playStopTimerRef = useRef(null);
+
+  // previous shot value (ms)
+  const prevShot = useRef(scoreboardState.getState().shotClock);
+
+  // UI flags
+  const [audioBlocked, setAudioBlocked] = useState(false);
+
+  // listen for scoreboard state changes
   useEffect(() => {
     const handleStateChange = (newState) => setScoreboardData(newState);
     scoreboardState.addListener(handleStateChange);
+    return () => scoreboardState.removeListener(handleStateChange);
+  }, []);
+
+  // tick to update UI regularly
+  useEffect(() => {
+    const t = setInterval(() => setLastUpdate(Date.now()), 100);
+    return () => clearInterval(t);
+  }, []);
+
+  // Preload + decode audio into AudioBuffer (WebAudio), and create AudioContext.
+  useEffect(() => {
+    let mounted = true;
+
+    const doPreload = async () => {
+      try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) {
+          console.warn("Web Audio API not available — using <audio> fallback.");
+          return;
+        }
+
+        // Create AudioContext but do not rely on it being already resumed (resume may require user gesture)
+        const ctx = new AudioContext();
+        audioCtxRef.current = ctx;
+
+        // Fetch the audio file (works for bundlers that emit a URL)
+        const resp = await fetch(timeSound);
+        if (!resp.ok) throw new Error("Failed to fetch audio asset.");
+        const arrayBuffer = await resp.arrayBuffer();
+
+        // decode
+        const decoded = await ctx.decodeAudioData(arrayBuffer);
+        if (mounted) {
+          audioBufferRef.current = decoded;
+        }
+
+        // pre-warm: play a single-sample silent buffer to warm audio thread (best-effort)
+        try {
+          if (ctx.state === "running") {
+            const silent = ctx.createBufferSource();
+            const silentBuf = ctx.createBuffer(1, 1, ctx.sampleRate);
+            silent.buffer = silentBuf;
+            silent.connect(ctx.destination);
+            silent.start();
+            // no need to stop; it's a single sample
+          }
+        } catch (e) {
+          // ignore warming errors
+        }
+      } catch (err) {
+        console.warn("WebAudio preload failed:", err);
+        // leave audioBufferRef null -> fallback will be used
+      }
+    };
+
+    doPreload();
 
     return () => {
-      scoreboardState.removeListener(handleStateChange);
+      mounted = false;
     };
   }, []);
 
+  // cleanup on unmount
   useEffect(() => {
-    const interval = setInterval(() => setLastUpdate(Date.now()), 100);
-    return () => clearInterval(interval);
+    return () => {
+      try {
+        if (sourceRef.current) {
+          sourceRef.current.stop();
+          sourceRef.current.disconnect();
+          sourceRef.current = null;
+        }
+      } catch (e) {}
+      if (playStopTimerRef.current) {
+        clearTimeout(playStopTimerRef.current);
+        playStopTimerRef.current = null;
+      }
+      try {
+        if (
+          audioCtxRef.current &&
+          typeof audioCtxRef.current.close === "function"
+        ) {
+          audioCtxRef.current.close();
+          audioCtxRef.current = null;
+        }
+      } catch (e) {}
+    };
   }, []);
 
-  // === FORMATTERS ===
+  // play segment via WebAudio if available, else fallback to HTMLAudio.
+  // startSec and endSec in seconds
+  const playSegment = async (startSec = 0.9, endSec = 4.0) => {
+    // cleanup existing
+    if (playStopTimerRef.current) {
+      clearTimeout(playStopTimerRef.current);
+      playStopTimerRef.current = null;
+    }
+    if (sourceRef.current) {
+      try {
+        sourceRef.current.stop();
+        sourceRef.current.disconnect();
+      } catch (e) {}
+      sourceRef.current = null;
+    }
+
+    const duration = Math.max(0, endSec - startSec);
+
+    // Try WebAudio
+    const ctx = audioCtxRef.current;
+    const buffer = audioBufferRef.current;
+    if (ctx && buffer) {
+      try {
+        // If suspended, try resume (may require user gesture)
+        if (ctx.state === "suspended") {
+          try {
+            await ctx.resume();
+            setAudioBlocked(false);
+          } catch (err) {
+            // resume blocked; mark blocked so UI prompts user
+            setAudioBlocked(true);
+            throw err;
+          }
+        }
+
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        src.connect(ctx.destination);
+        src.start(ctx.currentTime, startSec, duration);
+        sourceRef.current = src;
+
+        // schedule cleanup
+        playStopTimerRef.current = setTimeout(() => {
+          try {
+            if (sourceRef.current) {
+              sourceRef.current.stop();
+              sourceRef.current.disconnect();
+              sourceRef.current = null;
+            }
+          } catch (e) {}
+          playStopTimerRef.current = null;
+        }, Math.ceil(duration * 1000) + 50);
+
+        // success
+        setAudioBlocked(false);
+        return;
+      } catch (err) {
+        console.warn("WebAudio play failed, falling back:", err);
+        // fall through to HTMLAudio fallback
+      }
+    }
+
+    // HTMLAudio fallback (may be slower)
+    try {
+      const audioEl = audioElRef.current;
+      if (!audioEl) return;
+      audioEl.pause();
+      audioEl.currentTime = Math.max(0, startSec);
+      const p = audioEl.play();
+      if (p && typeof p.then === "function") {
+        p.then(() => {
+          setAudioBlocked(false);
+        }).catch((err) => {
+          console.warn("Fallback audio play blocked:", err);
+          setAudioBlocked(true);
+        });
+      }
+      playStopTimerRef.current = setTimeout(() => {
+        try {
+          audioEl.pause();
+          audioEl.currentTime = 0;
+        } catch (e) {}
+        playStopTimerRef.current = null;
+      }, Math.ceil(duration * 1000) + 50);
+    } catch (err) {
+      console.warn("Fallback audio error:", err);
+      setAudioBlocked(true);
+    }
+  };
+
+  // User gesture handler to resume audio context and test buzzer
+  const handleEnableSound = async () => {
+    try {
+      if (audioCtxRef.current && audioCtxRef.current.state !== "running") {
+        await audioCtxRef.current.resume();
+      }
+      setAudioBlocked(false);
+      // test play segment (user gesture)
+      playSegment(0.9, 4.0);
+    } catch (err) {
+      console.warn("Enable sound resume failed:", err);
+      setAudioBlocked(true);
+    }
+  };
+
+  // Formatters ----------------------------------------------------------------
   const formatGameTime = (ms) => {
     const totalSeconds = Math.floor(ms / 1000);
     if (totalSeconds >= 60) {
@@ -32,8 +228,7 @@ export default function DisplayScreen() {
       const seconds = totalSeconds % 60;
       return `${minutes}:${seconds.toString().padStart(2, "0")}`;
     } else {
-      const seconds = (ms / 1000).toFixed(1);
-      return seconds;
+      return (ms / 1000).toFixed(1);
     }
   };
 
@@ -44,16 +239,18 @@ export default function DisplayScreen() {
     return `${minutes}:${String(seconds).padStart(2, "0")}`;
   };
 
+  // Show "5.0" at exactly 5000ms, then floor tenths for <5000ms (no skip)
   const formatShotClock = (ms) => {
-    const totalSeconds = Math.ceil(ms / 1000);
-    if (totalSeconds >= 5) {
-      return totalSeconds.toString();
+    if (ms > 5000) {
+      return Math.ceil(ms / 1000).toString();
     } else {
-      return (ms / 1000).toFixed(1);
+      const tenths = Math.floor(ms / 100); // e.g. 4999/100 = 49
+      const value = tenths / 10;
+      return value.toFixed(1);
     }
   };
 
-  // === LIVE VALUES ===
+  // Live values ----------------------------------------------------------------
   const getCurrentGameTime = () => {
     if (!scoreboardData.isRunning) return scoreboardData.gameTime;
     const elapsed = Date.now() - scoreboardData.lastUpdate;
@@ -78,31 +275,31 @@ export default function DisplayScreen() {
   const shotTime = getCurrentShotClock();
   const restTime = getCurrentRest();
 
-  // === SOUND TRIGGER ===
-  useEffect(() => {
-    if (prevShot.current > 0 && shotTime <= 0) {
-      if (audioRef.current) {
-        try {
-          audioRef.current.currentTime = 0;
-          audioRef.current
-            .play()
-            .catch((e) => console.log("Audio play failed:", e));
-        } catch (error) {
-          console.log("Audio error:", error);
-        }
-      }
+  // Trigger buzzer BEFORE paint with useLayoutEffect, predictive at <= 100ms
+  useLayoutEffect(() => {
+    // If crossing from >100ms to <=100ms, trigger early so sound and paint align
+    const PRE_EMIT_THRESHOLD = 100; // ms
+    if (
+      prevShot.current > PRE_EMIT_THRESHOLD &&
+      shotTime <= PRE_EMIT_THRESHOLD
+    ) {
+      // attempt instant play (0.9s -> 4.0s)
+      playSegment(0.9, 4.0);
+    } else if (prevShot.current > 0 && shotTime <= 0) {
+      // fallback: if we missed the predictive window, ensure we still trigger on <=0
+      playSegment(0.9, 4.0);
     }
     prevShot.current = shotTime;
-  }, [shotTime]);
+  }, [shotTime]); // synchronous pre-paint
 
-  // rest auto-stop
+  // Rest auto-stop
   useEffect(() => {
     if (scoreboardData.restActive && restTime <= 0) {
       scoreboardState.stopRest();
     }
   }, [restTime, scoreboardData.restActive]);
 
-  // --- Foul lights renderer ---
+  // Foul lights renderer (unchanged)
   const renderFoulLights = (count) => {
     const foulLimit = Number(scoreboardData.foulLimit ?? 5);
     const maxLights = 6;
@@ -141,8 +338,30 @@ export default function DisplayScreen() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-900 to-black text-white p-4 flex justify-center items-center">
-      {/* buzzer */}
-      <audio ref={audioRef} src={timeSound} preload="auto" />
+      {/* HTMLAudio fallback element */}
+      <audio ref={audioElRef} src={timeSound} preload="auto" />
+
+      {/* If autoplay / AudioContext blocked, show prompt */}
+      {audioBlocked && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-auto">
+          <div className="bg-black/80 p-6 rounded-lg text-center text-white max-w-sm mx-4">
+            <div className="mb-4 text-lg font-bold">Enable Sound</div>
+            <div className="mb-4 text-sm">
+              Your browser is blocking immediate audio playback. Click below to
+              enable buzzer sound (this is a required user gesture for some
+              browsers).
+            </div>
+            <div className="flex justify-center gap-2">
+              <button
+                className="bg-green-600 px-4 py-2 rounded"
+                onClick={handleEnableSound}
+              >
+                Enable Sound & Test Buzzer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div
         className={`max-w-6xl w-full rounded-2xl p-8 shadow-2xl border-8 transition-all duration-500
