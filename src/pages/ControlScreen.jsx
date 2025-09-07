@@ -1,16 +1,23 @@
 import React, { useState, useEffect, useRef } from "react";
 import { scoreboardState } from "../utils/scoreboardState";
-import { Settings, Play, Pause, SkipForward, Bell } from "lucide-react";
+import {
+  Settings,
+  Pause,
+  Bell,
+  Plus,
+  Minus,
+  ChevronUp,
+  ChevronDown,
+} from "lucide-react";
 import timeSound from "../assets/sound/time.mp3";
 
 export default function ControlScreen() {
   const [scoreboardData, setScoreboardData] = useState(
     scoreboardState.getState()
   );
-  const audioRef = useRef(null); // <-- buzzer audio ref
-  const buzzerTimer = useRef(null); // <-- to manage stopping at 4s
+  const audioRef = useRef(null);
+  const buzzerTimer = useRef(null);
 
-  // Settings modal (temp values)
   const [showSettings, setShowSettings] = useState(false);
   const [tempTeamAName, setTempTeamAName] = useState("");
   const [tempTeamBName, setTempTeamBName] = useState("");
@@ -21,21 +28,20 @@ export default function ControlScreen() {
   const [tempDefaultGameMinutes, setTempDefaultGameMinutes] = useState(12);
   const [tempDefaultGameSeconds, setTempDefaultGameSeconds] = useState(0);
   const [tempTimeoutsPerTeam, setTempTimeoutsPerTeam] = useState(3);
+  const [tempTotalQuarters, setTempTotalQuarters] = useState(4);
 
-  // Edit clocks
   const [editingClock, setEditingClock] = useState(null);
   const [editMinutes, setEditMinutes] = useState(0);
   const [editSeconds, setEditSeconds] = useState(0);
   const [editShotSeconds, setEditShotSeconds] = useState(0);
 
-  // Next quarter confirm
   const [confirmNext, setConfirmNext] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
 
   useEffect(() => {
     const listener = (state) => setScoreboardData({ ...state });
     scoreboardState.addListener(listener);
 
-    // Live update (game/shot/rest/timeout countdown)
     const interval = setInterval(() => {
       const { gameTime, shotClock } = scoreboardState.getCurrentTimes();
       const { restTimeLeft } = scoreboardState.getCurrentRest();
@@ -54,7 +60,38 @@ export default function ControlScreen() {
     };
   }, []);
 
-  // cleanup buzzer timer on unmount
+  const getTimeoutRemainingSec = () => {
+    if (!scoreboardData.isTimeoutActive) return 0;
+    const last =
+      scoreboardData.timeoutLastUpdate ||
+      scoreboardData.lastUpdate ||
+      Date.now();
+    const elapsedSec = Math.floor((Date.now() - last) / 1000);
+    const remaining = Math.max(
+      0,
+      (Number(scoreboardData.timeoutTimeLeft) || 0) - elapsedSec
+    );
+    return remaining;
+  };
+
+  const timeoutRemaining = getTimeoutRemainingSec();
+
+  useEffect(() => {
+    if (scoreboardData.isTimeoutActive && timeoutRemaining <= 0) {
+      playBuzzerSegment();
+      endTimeout();
+    }
+    if (scoreboardData.restActive && scoreboardData.restTimeLeft <= 0) {
+      playBuzzerSegment();
+      scoreboardState.stopRest();
+    }
+  }, [
+    scoreboardData.isTimeoutActive,
+    scoreboardData.restActive,
+    scoreboardData.restTimeLeft,
+    timeoutRemaining,
+  ]);
+
   useEffect(() => {
     return () => {
       if (buzzerTimer.current) {
@@ -72,12 +109,10 @@ export default function ControlScreen() {
     };
   }, []);
 
-  // Play buzzer segment from 1s to 4s (stop after 3s)
   const playBuzzerSegment = () => {
     const audio = audioRef.current;
     if (!audio) return;
 
-    // If a segment is already playing, stop it
     if (buzzerTimer.current) {
       clearTimeout(buzzerTimer.current);
       buzzerTimer.current = null;
@@ -96,12 +131,10 @@ export default function ControlScreen() {
 
     const startAndPlay = () => {
       try {
-        // jump to start and play
         audio.currentTime = startSec;
         const playPromise = audio.play();
         if (playPromise && typeof playPromise.catch === "function") {
           playPromise.catch((e) => {
-            // Play may fail due to autoplay policy; log but still schedule stop
             console.log("Play failed:", e);
           });
         }
@@ -109,7 +142,6 @@ export default function ControlScreen() {
         console.log("Audio play error:", e);
       }
 
-      // schedule stop after the duration
       buzzerTimer.current = setTimeout(() => {
         try {
           audio.pause();
@@ -121,7 +153,6 @@ export default function ControlScreen() {
       }, msDuration);
     };
 
-    // If metadata not loaded, wait for it
     if (audio.readyState > 0) {
       startAndPlay();
     } else {
@@ -130,17 +161,14 @@ export default function ControlScreen() {
         startAndPlay();
       };
       audio.addEventListener("loadedmetadata", onLoaded);
-      // also attempt to load
       try {
         audio.load();
       } catch (e) {
-        // ignore
+        /* ignore */
       }
     }
   };
 
-  // --- New: mouse equivalents for Space and Ctrl keyboard shortcuts ---
-  // Space behavior: if both running -> stop both; else toggle game clock
   const handleSpaceClick = () => {
     const { gameTime, shotClock, now } = scoreboardState.getCurrentTimes();
     const st = scoreboardState.getState();
@@ -163,7 +191,6 @@ export default function ControlScreen() {
     }
   };
 
-  // Ctrl behavior: if both off -> start both; else toggle shot clock
   const handleCtrlClick = () => {
     const { gameTime, shotClock, now } = scoreboardState.getCurrentTimes();
     const st = scoreboardState.getState();
@@ -186,7 +213,6 @@ export default function ControlScreen() {
     }
   };
 
-  // Helpers
   const pad = (n) => String(n).padStart(2, "0");
   const formatTime = (ms) => {
     const totalSeconds = Math.floor(ms / 1000);
@@ -195,44 +221,6 @@ export default function ControlScreen() {
     return `${minutes}:${pad(seconds)}`;
   };
 
-  // Timeout remaining in seconds
-  const getTimeoutRemainingSec = () => {
-    if (!scoreboardData.isTimeoutActive) return 0;
-    const last =
-      scoreboardData.timeoutLastUpdate ||
-      scoreboardData.lastUpdate ||
-      Date.now();
-    const elapsedSec = Math.floor((Date.now() - last) / 1000);
-    const remaining = Math.max(
-      0,
-      (Number(scoreboardData.timeoutTimeLeft) || 0) - elapsedSec
-    );
-    return remaining;
-  };
-
-  // Ensure timeout vanishes immediately when it reaches zero
-  useEffect(() => {
-    if (scoreboardData.isTimeoutActive) {
-      const rem = getTimeoutRemainingSec();
-      if (rem <= 0) {
-        scoreboardState.updateState({
-          isTimeoutActive: false,
-          timeoutTeam: null,
-          timeoutTimeLeft: 0,
-          timeoutLastUpdate: null,
-        });
-      }
-    }
-  }, [
-    scoreboardData.timeoutTimeLeft,
-    scoreboardData.timeoutLastUpdate,
-    scoreboardData.isTimeoutActive,
-    scoreboardData.lastUpdate,
-    scoreboardData.teamATimeouts,
-    scoreboardData.teamBtimeouts,
-  ]);
-
-  // Open settings and populate temp fields
   const openSettings = () => {
     setTempTeamAName(scoreboardData.teamAName || "");
     setTempTeamBName(scoreboardData.teamBName || "");
@@ -247,6 +235,7 @@ export default function ControlScreen() {
     setTempDefaultGameSeconds(total % 60);
 
     setTempTimeoutsPerTeam(Number(scoreboardData.timeoutsPerTeam ?? 3));
+    setTempTotalQuarters(Number(scoreboardData.totalQuarters ?? 4));
     setShowSettings(true);
   };
 
@@ -256,9 +245,7 @@ export default function ControlScreen() {
       (Number(tempDefaultGameMinutes) || 0) * 60 +
         (Number(tempDefaultGameSeconds) || 0)
     );
-
     const newTimeouts = Number(tempTimeoutsPerTeam || 0);
-
     scoreboardState.updateState({
       teamAName: tempTeamAName,
       teamBName: tempTeamBName,
@@ -268,16 +255,13 @@ export default function ControlScreen() {
       restBetweenQuarters: Number(tempRestBetweenQuarters) || 0,
       defaultGameTime: defTotalSeconds * 1000,
       timeoutsPerTeam: newTimeouts,
-      teamATimeouts: newTimeouts,
-      teamBTimeouts: newTimeouts,
+      totalQuarters: Number(tempTotalQuarters) || 4,
     });
-
     setShowSettings(false);
   };
 
   const cancelSettings = () => setShowSettings(false);
 
-  // Edit clocks
   const openEditDialog = (type) => {
     setEditingClock(type);
     if (type === "game") {
@@ -289,20 +273,37 @@ export default function ControlScreen() {
     }
   };
 
+  const adjustTime = (clock, amount) => {
+    const { gameTime, shotClock, now } = scoreboardState.getCurrentTimes();
+    const st = scoreboardState.getState();
+    if (clock === "game") {
+      const newGameTime = Math.min(
+        st.defaultGameTime,
+        Math.max(0, gameTime + amount)
+      );
+      scoreboardState.updateState({ gameTime: newGameTime, lastUpdate: now });
+    } else if (clock === "shot") {
+      const newShotClock = Math.min(24000, Math.max(0, shotClock + amount));
+      scoreboardState.updateState({ shotClock: newShotClock, lastUpdate: now });
+    }
+  };
+
   const applyGameEdit = () => {
+    const st = scoreboardState.getState();
     const total = Math.max(
       0,
       (Number(editMinutes) || 0) * 60 + (Number(editSeconds) || 0)
     );
+    const newTime = Math.min(st.defaultGameTime, total * 1000);
     scoreboardState.updateState({
-      gameTime: total * 1000,
+      gameTime: newTime,
       lastUpdate: Date.now(),
     });
     setEditingClock(null);
   };
 
   const applyShotEdit = () => {
-    const sec = Math.max(0, Number(editShotSeconds) || 0);
+    const sec = Math.min(24, Math.max(0, Number(editShotSeconds) || 0));
     scoreboardState.updateState({
       shotClock: sec * 1000,
       lastUpdate: Date.now(),
@@ -310,32 +311,17 @@ export default function ControlScreen() {
     setEditingClock(null);
   };
 
-  // Score change helper
   const changeScore = (team, delta) => {
     const current = scoreboardState.getState();
     const key = team === "A" ? "teamAScore" : "teamBScore";
     const newScore = Math.max(0, (current[key] || 0) + delta);
-    const updates = { [key]: newScore };
-
-    if (delta > 0) {
-      updates.possession = team === "A" ? "B" : "A";
-    }
-
-    scoreboardState.updateState(updates);
+    scoreboardState.updateState({ [key]: newScore });
   };
 
-  // Manual possession controls
   const setPossession = (team) => {
     scoreboardState.updateState({ possession: team });
   };
 
-  const flipPossession = () => {
-    const cur = scoreboardState.getState().possession;
-    const other = cur === "A" ? "B" : "A";
-    scoreboardState.updateState({ possession: other });
-  };
-
-  // Use Timeout
   const useTimeout = (team) => {
     const tKey = team === "A" ? "teamATimeouts" : "teamBTimeouts";
     if ((scoreboardData[tKey] || 0) <= 0) return;
@@ -348,7 +334,6 @@ export default function ControlScreen() {
     });
   };
 
-  // End timeout early
   const endTimeout = () => {
     scoreboardState.updateState({
       isTimeoutActive: false,
@@ -358,73 +343,55 @@ export default function ControlScreen() {
     });
   };
 
-  // Next Quarter flow
   const handleNextQuarterClicked = () => setConfirmNext(true);
-
   const confirmNextQuarter = () => {
-    const state = scoreboardState.getState();
-    const defaultGame = state.defaultGameTime ?? 720000;
-    const timeoutsCount = Number(
-      state.timeoutsPerTeam ?? state.teamATimeouts ?? 3
-    );
-
-    const swapAndReset = {
-      quarter: (state.quarter || scoreboardData.quarter) + 1,
-      teamAName: state.teamBName,
-      teamBName: state.teamAName,
-      teamAColor: state.teamBColor,
-      teamBColor: state.teamAColor,
-      teamAScore: state.teamBScore,
-      teamBScore: state.teamAScore,
-      teamAFouls: 0,
-      teamBFouls: 0,
-      teamATimeouts: timeoutsCount,
-      teamBTimeouts: timeoutsCount,
-      isTimeoutActive: false,
-      timeoutTeam: null,
-      timeoutTimeLeft: 0,
-      timeoutLastUpdate: null,
-      gameTime: defaultGame,
-      shotClock: 24000,
-      isRunning: false,
-      isShotRunning: false,
-      lastUpdate: Date.now(),
-    };
-
-    scoreboardState.updateState(swapAndReset);
-    const restSec = state.restBetweenQuarters ?? 60;
-    scoreboardState.startRest(restSec);
+    scoreboardState.advanceQuarter();
     setConfirmNext(false);
   };
 
-  // Toggle rest timer
-  const toggleRestTimer = () => {
-    if (scoreboardData.restRunning) {
-      scoreboardState.pauseRest();
-    } else {
-      scoreboardState.resumeRest();
-    }
+  const resetQuarter = () => {
+    scoreboardState.resetQuarter();
   };
 
-  // Close rest early
-  const stopRestEarly = () => {
-    scoreboardState.stopRest();
+  const handleResetGameClicked = () => setConfirmReset(true);
+  const confirmResetGame = () => {
+    scoreboardState.resetGame();
+    setConfirmReset(false);
   };
 
-  // Format rest seconds
+  const changeFouls = (team, delta) => {
+    const key = team === "A" ? "teamAFouls" : "teamBFouls";
+    const newFouls = Math.max(0, (scoreboardData[key] || 0) + delta);
+    scoreboardState.updateState({ [key]: newFouls });
+  };
+
+  const changeTimeouts = (team, delta) => {
+    const key = team === "A" ? "teamATimeouts" : "teamBTimeouts";
+    const newTimeouts = Math.max(0, (scoreboardData[key] || 0) + delta);
+    scoreboardState.updateState({ [key]: newTimeouts });
+  };
+
   const formatRest = (ms) => {
     const s = Math.ceil((ms || 0) / 1000);
     return `${s}s`;
   };
 
-  // Helper to format timeout mm:ss
   const formatTimeoutMMSS = (seconds) => {
     const mm = Math.floor(seconds / 60);
     const ss = seconds % 60;
     return `${mm}:${String(ss).padStart(2, "0")}`;
   };
 
-  const timeoutRemaining = getTimeoutRemainingSec();
+  const TimeAdjuster = ({ onUp, onDown }) => (
+    <div className="flex flex-col items-center justify-center ml-2">
+      <button onClick={onUp} className="text-gray-400 hover:text-white">
+        <ChevronUp size={20} />
+      </button>
+      <button onClick={onDown} className="text-gray-400 hover:text-white">
+        <ChevronDown size={20} />
+      </button>
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6">
@@ -435,19 +402,18 @@ export default function ControlScreen() {
           <div className="text-sm text-gray-300 mt-2">
             {scoreboardData.teamAName}{" "}
             <span className="font-bold">{scoreboardData.teamAScore}</span>
-            {"  -  "}
+            {" - "}
             <span className="font-bold">{scoreboardData.teamBScore}</span>{" "}
             {scoreboardData.teamBName}
           </div>
         </div>
-
         <div className="flex items-center gap-3">
           <div className="text-center">
             <div className="text-lg">Quarter</div>
-            <div className="text-2xl font-bold">Q{scoreboardData.quarter}</div>
+            <div className="text-2xl font-bold">
+              {scoreboardData.quarter} / {scoreboardData.totalQuarters}
+            </div>
           </div>
-
-          {/* Manual buzzer button (uses same sound file as display) */}
           <div className="flex items-center">
             <audio ref={audioRef} src={timeSound} preload="auto" />
             <button
@@ -455,11 +421,9 @@ export default function ControlScreen() {
               className="flex items-center gap-2 px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700 mr-2"
               title="Play buzzer segment (1s → 4s)"
             >
-              <Bell className="w-5 h-5" />
-              Buzzer
+              <Bell className="w-5 h-5" /> Buzzer
             </button>
           </div>
-
           <button
             className="p-2 bg-gray-700 rounded hover:bg-gray-600"
             onClick={openSettings}
@@ -469,7 +433,7 @@ export default function ControlScreen() {
         </div>
       </div>
 
-      {/* Timeout banner */}
+      {/* Timeout Banner */}
       {scoreboardData.isTimeoutActive && (
         <div className="max-w-2xl mx-auto mb-6">
           <div className="bg-blue-800/90 p-3 rounded-lg flex items-center justify-between shadow-md">
@@ -483,28 +447,29 @@ export default function ControlScreen() {
                   : scoreboardData.teamBName}
               </div>
             </div>
-
             <div className="text-center">
               <div className="text-sm text-blue-100">Remaining</div>
               <div className="text-2xl font-mono font-extrabold">
                 {formatTimeoutMMSS(timeoutRemaining)}
               </div>
             </div>
-
             <div className="flex items-center gap-2">
               <button
                 className="bg-red-600 px-3 py-1 rounded flex items-center gap-1"
-                onClick={() => endTimeout()}
+                // ✅ UPDATED: Play sound on manual end
+                onClick={() => {
+                  playBuzzerSegment();
+                  endTimeout();
+                }}
               >
-                <Pause size={16} />
-                End Timeout
+                <Pause size={16} /> End Timeout
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Rest banner */}
+      {/* Rest Banner */}
       {scoreboardData.restActive && (
         <div className="max-w-2xl mx-auto mb-6">
           <div className="bg-purple-800/90 p-3 rounded-lg flex items-center justify-between shadow-md">
@@ -516,53 +481,48 @@ export default function ControlScreen() {
                 Between Quarters
               </div>
             </div>
-
             <div className="text-center">
               <div className="text-sm text-purple-100">Remaining</div>
               <div className="text-2xl font-mono font-extrabold">
                 {formatRest(scoreboardData.restTimeLeft)}
               </div>
             </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                className={`px-3 py-1 rounded flex items-center gap-1 ${
-                  scoreboardData.restRunning ? "bg-red-600" : "bg-green-600"
-                }`}
-                onClick={toggleRestTimer}
-              >
-                {scoreboardData.restRunning ? (
-                  <Pause size={16} />
-                ) : (
-                  <Play size={16} />
-                )}
-                {scoreboardData.restRunning ? "Pause" : "Start"}
-              </button>
-              <button
-                className="bg-gray-600 px-3 py-1 rounded flex items-center gap-1"
-                onClick={stopRestEarly}
-              >
-                <SkipForward size={16} />
-                Skip Rest
-              </button>
-            </div>
+            <button
+              className="bg-red-600 px-3 py-1 rounded flex items-center gap-1"
+              // ✅ UPDATED: Play sound on manual end
+              onClick={() => {
+                playBuzzerSegment();
+                scoreboardState.stopRest();
+              }}
+            >
+              <Pause size={16} /> End Rest
+            </button>
           </div>
         </div>
       )}
 
-      {/* Clocks */}
+      {/* The rest of the component's JSX is unchanged... */}
       <div className="flex justify-center gap-8 mb-6">
-        <div className="bg-gray-800 p-4 rounded-lg text-center cursor-pointer">
+        <div className="bg-gray-800 p-4 rounded-lg text-center">
           <h2 className="text-lg">Game Clock</h2>
-          <p
-            className="text-4xl font-mono hover:text-yellow-400 select-none"
-            onClick={() => openEditDialog("game")}
-            role="button"
-            tabIndex={0}
-          >
-            {formatTime(scoreboardData.gameTime)}
-          </p>
-          {/* START button now uses Space-equivalent mouse handler */}
+          <div className="flex items-center justify-center">
+            <TimeAdjuster
+              onUp={() => adjustTime("game", 60000)}
+              onDown={() => adjustTime("game", -60000)}
+            />
+            <p
+              className="text-4xl font-mono hover:text-yellow-400 select-none cursor-pointer mx-2"
+              onClick={() => openEditDialog("game")}
+              role="button"
+              tabIndex={0}
+            >
+              {formatTime(scoreboardData.gameTime)}
+            </p>
+            <TimeAdjuster
+              onUp={() => adjustTime("game", 1000)}
+              onDown={() => adjustTime("game", -1000)}
+            />
+          </div>
           <button
             className={`mt-2 ${
               scoreboardData.isRunning ? "bg-red-600" : "bg-blue-600"
@@ -572,22 +532,25 @@ export default function ControlScreen() {
             {scoreboardData.isRunning ? "Pause" : "Start"}
           </button>
         </div>
-
-        <div className="bg-gray-800 p-4 rounded-lg text-center cursor-pointer">
+        <div className="bg-gray-800 p-4 rounded-lg text-center">
           <h2 className="text-lg">Shot Clock</h2>
-          <p
-            className="text-4xl font-mono hover:text-yellow-400 select-none"
-            onClick={() => openEditDialog("shot")}
-            role="button"
-            tabIndex={0}
-          >
-            {Math.ceil(scoreboardData.shotClock / 1000)}
-          </p>
-
+          <div className="flex items-center justify-center">
+            <p
+              className="text-4xl font-mono hover:text-yellow-400 select-none cursor-pointer"
+              onClick={() => openEditDialog("shot")}
+              role="button"
+              tabIndex={0}
+            >
+              {Math.ceil(scoreboardData.shotClock / 1000)}
+            </p>
+            <TimeAdjuster
+              onUp={() => adjustTime("shot", 1000)}
+              onDown={() => adjustTime("shot", -1000)}
+            />
+          </div>
           <div className="mt-2 flex gap-2 justify-center">
-            {/* START button now uses Ctrl-equivalent mouse handler */}
             <button
-              className={`mt-2 ${
+              className={` ${
                 scoreboardData.isShotRunning ? "bg-red-600" : "bg-blue-600"
               } px-4 py-2 rounded`}
               onClick={handleCtrlClick}
@@ -595,13 +558,13 @@ export default function ControlScreen() {
               {scoreboardData.isShotRunning ? "Pause" : "Start"}
             </button>
             <button
-              className="bg-red-600 px-8 py-4 text-2xl rounded shadow"
+              className="bg-gray-600 px-4 py-2 rounded"
               onClick={() => scoreboardState.resetShotClock(24)}
             >
               24
             </button>
             <button
-              className="bg-orange-600 px-8 py-4 text-2xl rounded shadow"
+              className="bg-gray-600 px-4 py-2 rounded"
               onClick={() => scoreboardState.resetShotClock(14)}
             >
               14
@@ -609,8 +572,6 @@ export default function ControlScreen() {
           </div>
         </div>
       </div>
-
-      {/* Possession controls */}
       <div className="flex justify-center gap-4 mb-6">
         <div className="bg-gray-800 p-3 rounded-lg text-center">
           <div className="text-sm">Possession</div>
@@ -625,6 +586,10 @@ export default function ControlScreen() {
             >
               {scoreboardData.teamAName}
             </button>
+            <div className="w-12 text-center text-yellow-400 text-2xl font-bold">
+              {scoreboardData.possession === "A" && "➡"}
+              {scoreboardData.possession === "B" && "⬅"}
+            </div>
             <button
               onClick={() => setPossession("B")}
               className={`px-4 py-2 rounded ${
@@ -635,18 +600,10 @@ export default function ControlScreen() {
             >
               {scoreboardData.teamBName}
             </button>
-            <button
-              onClick={flipPossession}
-              className="ml-2 px-3 py-2 bg-red-600 rounded"
-            >
-              Turnover
-            </button>
           </div>
         </div>
       </div>
-
-      {/* Teams */}
-      <div className="grid grid-cols-2 gap-6 mb-6">
+      <div className="grid grid-cols-2 gap-6 mb-6 relative">
         {[
           ["A", scoreboardData.teamAName, scoreboardData.teamAColor],
           ["B", scoreboardData.teamBName, scoreboardData.teamBColor],
@@ -657,7 +614,6 @@ export default function ControlScreen() {
             style={{ borderTop: `4px solid ${color}` }}
           >
             <h2 className="text-xl font-bold mb-2">{name}</h2>
-
             <div className="bg-gray-900 rounded-lg p-4 mb-4">
               <div className="text-sm text-gray-400">Score</div>
               <div className="text-5xl font-extrabold">
@@ -666,7 +622,6 @@ export default function ControlScreen() {
                   : scoreboardData.teamBScore}
               </div>
             </div>
-
             <div className="flex justify-center gap-3 mb-3">
               {[1, 2, 3].map((n) => (
                 <button
@@ -678,7 +633,6 @@ export default function ControlScreen() {
                 </button>
               ))}
             </div>
-
             <div className="flex justify-center gap-3 mb-4">
               {[-1, -2, -3].map((n) => (
                 <button
@@ -690,280 +644,172 @@ export default function ControlScreen() {
                 </button>
               ))}
             </div>
-
-            <p>
+            <div className="text-sm">
               Fouls:{" "}
-              {team === "A"
-                ? scoreboardData.teamAFouls
-                : scoreboardData.teamBFouls}
-            </p>
-            <button
-              className="bg-yellow-600 px-3 py-1 rounded mt-2"
-              onClick={() =>
-                scoreboardState.updateState({
-                  [team === "A" ? "teamAFouls" : "teamBFouls"]:
-                    (team === "A"
-                      ? scoreboardData.teamAFouls
-                      : scoreboardData.teamBFouls) + 1,
-                })
-              }
-            >
-              Add Foul
-            </button>
-
-            <p className="mt-2">
+              <span className="font-bold">
+                {team === "A"
+                  ? scoreboardData.teamAFouls
+                  : scoreboardData.teamBFouls}
+              </span>
+            </div>
+            <div className="flex justify-center gap-2 mt-2 mb-4">
+              <button
+                className="bg-red-600 p-2 rounded-full"
+                onClick={() => changeFouls(team, -1)}
+                aria-label="Remove Foul"
+              >
+                <Minus size={20} />
+              </button>
+              <button
+                className="bg-yellow-600 p-2 rounded-full"
+                onClick={() => changeFouls(team, 1)}
+                aria-label="Add Foul"
+              >
+                <Plus size={20} />
+              </button>
+            </div>
+            <div className="text-sm">
               Timeouts:{" "}
-              {team === "A"
-                ? scoreboardData.teamATimeouts
-                : scoreboardData.teamBTimeouts}
-            </p>
-            <button
-              className="bg-purple-600 px-3 py-1 rounded mt-2"
-              onClick={() => useTimeout(team)}
-            >
-              Use Timeout
-            </button>
+              <span className="font-bold">
+                {team === "A"
+                  ? scoreboardData.teamATimeouts
+                  : scoreboardData.teamBTimeouts}
+              </span>
+            </div>
+            <div className="flex justify-center items-center gap-4 mt-2">
+              <button
+                className="bg-blue-600 px-3 py-1 rounded"
+                onClick={() => useTimeout(team)}
+              >
+                Use Timeout
+              </button>
+              <div className="flex gap-2">
+                <button
+                  className="bg-gray-600 p-2 rounded-full"
+                  onClick={() => changeTimeouts(team, -1)}
+                >
+                  <Minus size={16} />
+                </button>
+                <button
+                  className="bg-gray-600 p-2 rounded-full"
+                  onClick={() => changeTimeouts(team, 1)}
+                >
+                  <Plus size={16} />
+                </button>
+              </div>
+            </div>
           </div>
         ))}
       </div>
-
-      {/* Bottom controls */}
-      <div className="flex justify-center gap-4 mb-8">
-        <button
-          className="bg-blue-600 px-4 py-2 rounded"
-          onClick={handleNextQuarterClicked}
-        >
-          Next Quarter
-        </button>
-
-        <button
-          className="bg-red-600 px-4 py-2 rounded"
-          onClick={() => {
-            const def = scoreboardData.defaultGameTime ?? 720000;
-            const t = scoreboardData.timeoutsPerTeam ?? 3;
-            scoreboardState.updateState({
-              gameTime: def,
-              quarter: 1,
-              shotClock: 24000,
-              teamAScore: 0,
-              teamBScore: 0,
-              teamAFouls: 0,
-              teamBFouls: 0,
-              teamATimeouts: t,
-              teamBTimeouts: t,
-              isTimeoutActive: false,
-              timeoutTeam: null,
-              timeoutTimeLeft: 0,
-              timeoutLastUpdate: null,
-              isRunning: false,
-              isShotRunning: false,
-              possession: "A",
-              lastUpdate: Date.now(),
-            });
-          }}
-        >
-          Reset Game
-        </button>
-      </div>
-
-      {/* Followed by confirm modal, settings modal, edit modals... */}
-      {confirmNext && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
-          <div className="bg-white text-black p-6 rounded-lg w-80">
-            <h2 className="text-xl font-bold mb-4">Confirm Next Quarter</h2>
-            <p className="mb-4">
-              Are you sure you want to advance to the next quarter and swap
-              sides?
-            </p>
-            <div className="flex justify-end gap-2">
+      <div className="mt-8 pt-6 border-t border-gray-700 flex flex-wrap justify-center items-start gap-6">
+        <div className="bg-gray-800 p-4 rounded-lg text-center">
+          <div className="text-sm mb-2">Game Flow</div>
+          {!confirmNext ? (
+            <button
+              onClick={handleNextQuarterClicked}
+              disabled={scoreboardData.quarter >= scoreboardData.totalQuarters}
+              className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded disabled:bg-gray-600 disabled:cursor-not-allowed"
+            >
+              Next Quarter
+            </button>
+          ) : (
+            <div className="flex gap-2 bg-gray-700 p-2 rounded-lg items-center">
+              <span className="text-yellow-400 font-semibold">
+                Are you sure?
+              </span>
               <button
-                className="bg-gray-500 px-4 py-2 rounded text-white"
                 onClick={() => setConfirmNext(false)}
+                className="bg-gray-500 hover:bg-gray-400 px-3 py-1 rounded"
               >
                 Cancel
               </button>
               <button
-                className="bg-blue-600 px-4 py-2 rounded text-white"
                 onClick={confirmNextQuarter}
+                className="bg-green-600 hover:bg-green-500 px-3 py-1 rounded"
               >
                 Confirm
               </button>
             </div>
-          </div>
+          )}
         </div>
-      )}
-
-      {showSettings && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
-          <div className="bg-white text-black p-6 rounded-lg w-96 max-h-screen overflow-y-auto">
-            <h2 className="text-xl font-bold mb-4">Settings</h2>
-
-            <label className="block mb-2">Team A Name</label>
-            <input
-              type="text"
-              className="w-full border px-2 py-1 mb-2"
-              value={tempTeamAName}
-              onChange={(e) => setTempTeamAName(e.target.value)}
-            />
-
-            <label className="block mb-2">Team A Color</label>
-            <input
-              type="color"
-              className="mb-4"
-              value={tempTeamAColor}
-              onChange={(e) => setTempTeamAColor(e.target.value)}
-            />
-
-            <label className="block mb-2">Team B Name</label>
-            <input
-              type="text"
-              className="w-full border px-2 py-1 mb-2"
-              value={tempTeamBName}
-              onChange={(e) => setTempTeamBName(e.target.value)}
-            />
-
-            <label className="block mb-2">Team B Color</label>
-            <input
-              type="color"
-              className="mb-4"
-              value={tempTeamBColor}
-              onChange={(e) => setTempTeamBColor(e.target.value)}
-            />
-
-            <label className="block mb-2">Timeout Duration (seconds)</label>
-            <input
-              type="number"
-              className="w-full border px-2 py-1 mb-4"
-              value={tempTimeoutDuration}
-              onChange={(e) =>
-                setTempTimeoutDuration(Number(e.target.value || 0))
-              }
-            />
-
-            <label className="block mb-2">Timeouts per team</label>
-            <input
-              type="number"
-              className="w-full border px-2 py-1 mb-4"
-              value={tempTimeoutsPerTeam}
-              onChange={(e) =>
-                setTempTimeoutsPerTeam(Math.max(0, Number(e.target.value || 0)))
-              }
-            />
-
-            <label className="block mb-2">
-              Rest Between Quarters (seconds)
-            </label>
-            <input
-              type="number"
-              className="w-full border px-2 py-1 mb-4"
-              value={tempRestBetweenQuarters}
-              onChange={(e) =>
-                setTempRestBetweenQuarters(Number(e.target.value || 0))
-              }
-            />
-
-            <label className="block mb-2">Default Game Time (MM : SS)</label>
-            <div className="flex gap-2 items-center mb-4">
-              <input
-                type="number"
-                className="w-24 border px-2 py-1 text-center"
-                value={tempDefaultGameMinutes}
-                onChange={(e) =>
-                  setTempDefaultGameMinutes(
-                    Math.max(0, Number(e.target.value || 0))
-                  )
-                }
-              />
-              <span>:</span>
-              <input
-                type="number"
-                className="w-24 border px-2 py-1 text-center"
-                value={pad(tempDefaultGameSeconds)}
-                onChange={(e) => {
-                  let val = parseInt(
-                    String(e.target.value).replace(/\D/g, "") || "0"
-                  );
-                  if (isNaN(val)) val = 0;
-                  if (val >= 60) {
-                    const extra = Math.floor(val / 60);
-                    setTempDefaultGameMinutes((m) => (Number(m) || 0) + extra);
-                    val = val % 60;
-                  }
-                  setTempDefaultGameSeconds(val);
-                }}
-              />
-            </div>
-
-            <div className="flex justify-end gap-2">
+        <div className="bg-gray-800 p-4 rounded-lg text-center">
+          <div className="text-sm mb-2">Reset Options</div>
+          <div className="flex flex-col gap-3">
+            <button
+              onClick={resetQuarter}
+              className="bg-yellow-700 hover:bg-yellow-600 px-4 py-2 rounded"
+            >
+              Reset Current Quarter
+            </button>
+            {!confirmReset ? (
               <button
-                className="bg-gray-500 px-4 py-2 rounded text-white"
-                onClick={cancelSettings}
+                onClick={handleResetGameClicked}
+                className="bg-red-800 hover:bg-red-700 px-4 py-2 rounded"
               >
-                Cancel
+                Reset Full Game
               </button>
-              <button
-                className="bg-green-600 px-4 py-2 rounded text-white"
-                onClick={saveSettings}
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {editingClock === "game" && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
-          <div className="bg-white text-black p-6 rounded-lg w-80">
-            <h2 className="text-xl font-bold mb-4">Edit Game Clock</h2>
-
-            <div className="flex gap-2 items-center justify-center mb-2">
-              <div className="text-center">
-                <label className="block text-sm mb-1">Minutes</label>
-                <input
-                  type="number"
-                  className="w-24 border px-2 py-2 text-center text-2xl"
-                  value={editMinutes}
-                  onChange={(e) =>
-                    setEditMinutes(Math.max(0, parseInt(e.target.value || "0")))
-                  }
-                />
+            ) : (
+              <div className="flex gap-2 bg-gray-700 p-2 rounded-lg items-center">
+                <span className="text-red-400 font-semibold">Reset Game?</span>
+                <button
+                  onClick={() => setConfirmReset(false)}
+                  className="bg-gray-500 hover:bg-gray-400 px-3 py-1 rounded"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmResetGame}
+                  className="bg-red-600 hover:bg-red-500 px-3 py-1 rounded"
+                >
+                  Confirm
+                </button>
               </div>
-
-              <div className="text-2xl font-bold">:</div>
-
-              <div className="text-center">
-                <label className="block text-sm mb-1">Seconds</label>
+            )}
+          </div>
+        </div>
+      </div>
+      {editingClock && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+          <div className="bg-gray-800 p-6 rounded-lg shadow-xl text-center">
+            <h3 className="text-xl mb-4">
+              Edit {editingClock === "game" ? "Game Clock" : "Shot Clock"}
+            </h3>
+            {editingClock === "game" ? (
+              <div className="flex items-center gap-2">
                 <input
                   type="number"
-                  className="w-24 border px-2 py-2 text-center text-2xl"
+                  value={pad(editMinutes)}
+                  onChange={(e) => setEditMinutes(parseInt(e.target.value))}
+                  className="w-24 text-4xl text-center bg-gray-700 rounded p-2"
+                />
+                <span className="text-4xl">:</span>
+                <input
+                  type="number"
                   value={pad(editSeconds)}
-                  onChange={(e) => {
-                    let val = parseInt(
-                      String(e.target.value).replace(/\D/g, "") || "0"
-                    );
-                    if (isNaN(val)) val = 0;
-                    if (val >= 60) {
-                      const extra = Math.floor(val / 60);
-                      setEditMinutes((m) => (Number(m) || 0) + extra);
-                      val = val % 60;
-                    }
-                    setEditSeconds(Math.max(0, val));
-                  }}
+                  onChange={(e) => setEditSeconds(parseInt(e.target.value))}
+                  className="w-24 text-4xl text-center bg-gray-700 rounded p-2"
                 />
               </div>
-            </div>
-
-            <div className="flex justify-end gap-2">
+            ) : (
+              <input
+                type="number"
+                value={editShotSeconds}
+                onChange={(e) => setEditShotSeconds(parseInt(e.target.value))}
+                className="w-24 text-4xl text-center bg-gray-700 rounded p-2"
+              />
+            )}
+            <div className="mt-6 flex justify-center gap-4">
               <button
-                className="bg-gray-500 px-4 py-2 rounded text-white"
                 onClick={() => setEditingClock(null)}
+                className="px-4 py-2 bg-gray-600 rounded"
               >
                 Cancel
               </button>
               <button
-                className="bg-blue-600 px-4 py-2 rounded text-white"
-                onClick={applyGameEdit}
+                onClick={
+                  editingClock === "game" ? applyGameEdit : applyShotEdit
+                }
+                className="px-4 py-2 bg-blue-600 rounded"
               >
                 Apply
               </button>
@@ -971,35 +817,130 @@ export default function ControlScreen() {
           </div>
         </div>
       )}
-
-      {editingClock === "shot" && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
-          <div className="bg-white text-black p-6 rounded-lg w-72">
-            <h2 className="text-xl font-bold mb-4">
-              Edit Shot Clock (seconds)
-            </h2>
-
-            <input
-              type="number"
-              className="w-full border px-2 py-3 text-center text-2xl mb-2"
-              value={editShotSeconds}
-              onChange={(e) =>
-                setEditShotSeconds(Math.max(0, parseInt(e.target.value || "0")))
-              }
-            />
-
-            <div className="flex justify-end gap-2">
+      {showSettings && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+          <div className="bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-md">
+            <h3 className="text-xl mb-6 font-bold">Settings</h3>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm mb-1">Home Team Name</label>
+                  <input
+                    type="text"
+                    value={tempTeamAName}
+                    onChange={(e) => setTempTeamAName(e.target.value)}
+                    className="w-full bg-gray-700 p-2 rounded"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">Home Team Color</label>
+                  <input
+                    type="color"
+                    value={tempTeamAColor}
+                    onChange={(e) => setTempTeamAColor(e.target.value)}
+                    className="w-full h-10 bg-gray-700 p-1 rounded"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm mb-1">Away Team Name</label>
+                  <input
+                    type="text"
+                    value={tempTeamBName}
+                    onChange={(e) => setTempTeamBName(e.target.value)}
+                    className="w-full bg-gray-700 p-2 rounded"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">Away Team Color</label>
+                  <input
+                    type="color"
+                    value={tempTeamBColor}
+                    onChange={(e) => setTempTeamBColor(e.target.value)}
+                    className="w-full h-10 bg-gray-700 p-1 rounded"
+                  />
+                </div>
+              </div>
+              <hr className="border-gray-600" />
+              <div>
+                <label className="block text-sm mb-1">Default Game Time</label>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    value={tempDefaultGameMinutes}
+                    onChange={(e) => setTempDefaultGameMinutes(e.target.value)}
+                    className="w-full bg-gray-700 p-2 rounded"
+                    placeholder="Mins"
+                  />
+                  <input
+                    type="number"
+                    value={tempDefaultGameSeconds}
+                    onChange={(e) => setTempDefaultGameSeconds(e.target.value)}
+                    className="w-full bg-gray-700 p-2 rounded"
+                    placeholder="Secs"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm mb-1">
+                    Timeouts Per Team
+                  </label>
+                  <input
+                    type="number"
+                    value={tempTimeoutsPerTeam}
+                    onChange={(e) => setTempTimeoutsPerTeam(e.target.value)}
+                    className="w-full bg-gray-700 p-2 rounded"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">Total Quarters</label>
+                  <input
+                    type="number"
+                    value={tempTotalQuarters}
+                    onChange={(e) => setTempTotalQuarters(e.target.value)}
+                    className="w-full bg-gray-700 p-2 rounded"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm mb-1">
+                    Timeout Duration (s)
+                  </label>
+                  <input
+                    type="number"
+                    value={tempTimeoutDuration}
+                    onChange={(e) => setTempTimeoutDuration(e.target.value)}
+                    className="w-full bg-gray-700 p-2 rounded"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">
+                    Rest Between Quarters (s)
+                  </label>
+                  <input
+                    type="number"
+                    value={tempRestBetweenQuarters}
+                    onChange={(e) => setTempRestBetweenQuarters(e.target.value)}
+                    className="w-full bg-gray-700 p-2 rounded"
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-4">
               <button
-                className="bg-gray-500 px-4 py-2 rounded text-white"
-                onClick={() => setEditingClock(null)}
+                onClick={cancelSettings}
+                className="px-4 py-2 bg-gray-600 rounded"
               >
                 Cancel
               </button>
               <button
-                className="bg-blue-600 px-4 py-2 rounded text-white"
-                onClick={applyShotEdit}
+                onClick={saveSettings}
+                className="px-4 py-2 bg-blue-600 rounded"
               >
-                Apply
+                Save Settings
               </button>
             </div>
           </div>
