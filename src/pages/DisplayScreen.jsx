@@ -34,31 +34,73 @@ export default function DisplayScreen() {
     const doPreload = async () => {
       try {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
-        if (!AudioContext) return;
-
-        const ctx = new AudioContext();
-        audioCtxRef.current = ctx;
+        if (!AudioContext) {
+          // No WebAudio support — we'll rely on <audio> element fallback.
+        } else {
+          const ctx = new AudioContext();
+          audioCtxRef.current = ctx;
+        }
 
         const resp = await fetch(timeSound);
         if (!resp.ok) throw new Error("Failed to fetch audio asset.");
         const arrayBuffer = await resp.arrayBuffer();
 
-        const decoded = await ctx.decodeAudioData(arrayBuffer);
-        if (mounted) {
-          audioBufferRef.current = decoded;
+        // If we have an AudioContext, decode into buffer:
+        if (audioCtxRef.current) {
+          const decoded = await audioCtxRef.current.decodeAudioData(
+            arrayBuffer
+          );
+          if (mounted) {
+            audioBufferRef.current = decoded;
+          }
+        } else {
+          // No AudioContext; preload into the <audio> element by creating an object URL
+          if (mounted && audioElRef.current) {
+            try {
+              // attempt to load into the <audio> element (browser will handle caching)
+              audioElRef.current.src = timeSound;
+              audioElRef.current.load();
+            } catch (e) {
+              // ignore
+            }
+          }
         }
 
-        try {
-          if (ctx.state === "running") {
-            const silent = ctx.createBufferSource();
-            const silentBuf = ctx.createBuffer(1, 1, ctx.sampleRate);
-            silent.buffer = silentBuf;
-            silent.connect(ctx.destination);
-            silent.start();
+        // --- NEW: detect if audio is blocked and show dialog when needed ---
+        // Slight timeout to let browser settle
+        setTimeout(() => {
+          if (!mounted) return;
+          if (audioCtxRef.current) {
+            // If the AudioContext exists but is suspended -> browser needs gesture
+            if (audioCtxRef.current.state === "suspended") {
+              setAudioBlocked(true);
+            }
+          } else {
+            // No AudioContext: try a gentle play() test on the <audio> element to detect autoplay block.
+            const audioEl = audioElRef.current;
+            if (audioEl && typeof audioEl.play === "function") {
+              const p = audioEl.play();
+              if (p && typeof p.then === "function") {
+                p.then(() => {
+                  // autoplay succeeded — pause immediately (we don't want sound right now)
+                  try {
+                    audioEl.pause();
+                    audioEl.currentTime = 0;
+                  } catch (e) {
+                    /* ignore */
+                  }
+                }).catch(() => {
+                  // play was blocked
+                  setAudioBlocked(true);
+                });
+              }
+            }
           }
-        } catch (e) {}
+        }, 50);
       } catch (err) {
         console.warn("WebAudio preload failed:", err);
+        // If preload fails, best to show enable dialog so user can try manually
+        setAudioBlocked(true);
       }
     };
 
@@ -278,7 +320,7 @@ export default function DisplayScreen() {
   }, [restTime, scoreboardData.restActive]);
 
   const renderFoulLights = (count) => {
-    const maxLights = 4; // Changed from 6 to 4
+    const maxLights = 4;
     const filled = Math.min(count, maxLights);
     const lights = [];
     for (let i = 0; i < maxLights; i++) {
@@ -287,7 +329,7 @@ export default function DisplayScreen() {
         <div
           key={i}
           aria-hidden
-          className={`w-6 h-6 rounded-full border-2 ${
+          className={`w-12 h-12 rounded-full border-2 ${
             isFilled
               ? "bg-red-500 border-red-600"
               : "bg-transparent border-gray-600"
@@ -302,7 +344,7 @@ export default function DisplayScreen() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-900 to-black text-white p-4 flex justify-center items-center">
+    <div className="min-h-screen flex justify-center items-center bg-gray-900/10">
       <audio ref={audioElRef} src={timeSound} preload="auto" />
 
       {audioBlocked && (
@@ -326,117 +368,120 @@ export default function DisplayScreen() {
       )}
 
       <div
-        className={`max-w-6xl w-full rounded-2xl p-8 shadow-2xl border-8 transition-all duration-500
+        className={`max-w-8xl w-full h-auto rounded-2xl p-5 shadow-2xl border-8 transition-all duration-500
           ${
             shotTime <= 0
               ? "bg-red-900 border-red-600 shadow-[0_0_40px_15px_rgba(255,0,0,0.8)] animate-pulse"
-              : "bg-black border-yellow-500"
+              : "bg-white border-yellow-500"
           }`}
       >
-        {/* Header */}
-        <div className="flex justify-between items-center mb-8">
-          <div className="text-4xl font-bold">Q{scoreboardData.quarter}</div>
-
-          <div className="flex gap-6">
-            <div className="text-center">
-              <div className="text-sm text-gray-300">GAME</div>
-              <div
-                className={`text-5xl md:text-6xl font-mono font-extrabold px-6 py-2 rounded ${
-                  gameTime < 60000 ? "bg-yellow-600 text-black" : ""
-                }`}
-              >
-                {formatGameTime(gameTime)}
-              </div>
-            </div>
-
-            {!scoreboardData.restActive && (
-              <div
-                className={`px-6 py-3 rounded-2xl text-center shadow-lg ${
-                  shotTime < 5000 ? "bg-red-700" : "bg-red-600"
-                }`}
-              >
-                <div className="text-sm">SHOT</div>
-                <div className="text-5xl md:text-6xl font-mono font-extrabold">
-                  {formatShotClock(shotTime)}
+        {/* Top: big game time (or REST) */}
+        <div className="flex justify-center">
+          <div className="text-center">
+            {scoreboardData.restActive ? (
+              <>
+                <div className="text-6xl text-gray-500">REST</div>
+                <div className="text-8xl md:text-[400px] font-extrabold text-blue-600">
+                  {formatRestTime(restTime)}
                 </div>
-              </div>
+              </>
+            ) : (
+              <>
+                <div
+                  className={`text-8xl md:text-[400px] font-extrabold ${
+                    gameTime < 60000 ? "text-red-600" : ""
+                  }`}
+                >
+                  {formatGameTime(gameTime)}
+                </div>
+              </>
             )}
           </div>
-
-          {/* Possession is removed */}
         </div>
 
-        {scoreboardData.restActive && (
-          <div className="text-center px-6 py-4 bg-blue-700/90 rounded-2xl shadow-md mb-8">
-            <div className="text-sm uppercase tracking-wider text-blue-100">
-              Rest
-            </div>
-            <div className="text-3xl md:text-4xl font-mono font-extrabold text-white mt-1">
-              {formatRestTime(restTime)}
-            </div>
-            <div className="text-xs text-blue-100/80 mt-1">
-              break between quarters
-            </div>
-          </div>
-        )}
+        {/* Quarter indicator */}
+        <div className="text-8xl font-bold text-center mt-6">
+          {scoreboardData.quarter > scoreboardData.totalQuarters
+            ? `OT${scoreboardData.quarter - scoreboardData.totalQuarters}`
+            : `Q${scoreboardData.quarter}`}
+        </div>
 
-        {/* Teams with possession arrow in the middle */}
-        <div className="grid grid-cols-2 gap-12 relative">
+        {/* Grid: Team A | Shot Clock (big) | Team B */}
+        <div className="grid grid-cols-3 gap-6 relative mt-8">
           {/* Team A */}
           <div
-            className="text-center"
+            className="text-center flex flex-col items-center justify-center"
             style={{ color: scoreboardData.teamAColor }}
           >
-            <div className="text-5xl font-bold mb-4">
+            <div className="text-5xl md:text-[170px] font-bold">
               {scoreboardData.teamAName}
             </div>
-            <div className="text-9xl font-extrabold bg-gray-800 py-6 rounded-xl shadow-inner mb-6">
+
+            <div className="text-[120px] sm:text-[160px] md:text-[220px] lg:text-[330px] font-extrabold leading-none">
               {scoreboardData.teamAScore}
             </div>
-            <div className="mb-4">
-              <div className="text-sm mb-2">FOULS</div>
+
+            <div className="mb-2">
+              <div className="text-2xl md:text-5xl mb-2">FOULS</div>
               {renderFoulLights(scoreboardData.teamAFouls || 0)}
             </div>
-            <div className="bg-gray-800 p-4 rounded-lg shadow inline-block">
-              <div className="text-sm">TO</div>
-              <div className="text-4xl font-bold">
+
+            <div className="p-3 md:p-4 rounded-lg shadow inline-block mt-3">
+              <div className="text-2xl md:text-5xl">TO</div>
+              <div className="text-4xl md:text-8xl font-bold">
                 {scoreboardData.teamATimeouts}
+              </div>
+            </div>
+          </div>
+
+          {/* Shot Clock — always present, BIG, centered between scores */}
+          <div className="flex items-center justify-center -mt-[180px]">
+            <div
+              className={`flex items-center justify-center rounded-3xl shadow-2xl px-3 py-5 min-w-[350px]  ${
+                shotTime < 5000 ? "bg-red-700" : "bg-red-600"
+              }`}
+            >
+              <div className="text-[170px] sm:text-[160px] md:text-[2500px] lg:text-[330px] font-extrabold text-white leading-none">
+                {formatShotClock(shotTime)}
               </div>
             </div>
           </div>
 
           {/* Team B */}
           <div
-            className="text-center"
+            className="text-center flex flex-col items-center justify-center"
             style={{ color: scoreboardData.teamBColor }}
           >
-            <div className="text-5xl font-bold mb-4">
+            <div className="text-5xl md:text-[170px] font-bold">
               {scoreboardData.teamBName}
             </div>
-            <div className="text-9xl font-extrabold bg-gray-800 py-6 rounded-xl shadow-inner mb-6">
+
+            <div className="text-[120px] sm:text-[160px] md:text-[220px] lg:text-[330px] font-extrabold leading-none">
               {scoreboardData.teamBScore}
             </div>
-            <div className="mb-4">
-              <div className="text-sm mb-2">FOULS</div>
+
+            <div className="mb-2">
+              <div className="text-2xl md:text-5xl mb-2">FOULS</div>
               {renderFoulLights(scoreboardData.teamBFouls || 0)}
             </div>
-            <div className="bg-gray-800 p-4 rounded-lg shadow inline-block">
-              <div className="text-sm">TO</div>
-              <div className="text-4xl font-bold">
+
+            <div className="p-3 md:p-4 rounded-lg shadow inline-block mt-3">
+              <div className="text-2xl md:text-5xl">TO</div>
+              <div className="text-4xl md:text-8xl font-bold">
                 {scoreboardData.teamBTimeouts}
               </div>
             </div>
           </div>
-
-          {/* Possession Arrow in the Middle */}
-          {scoreboardData.possession && (
-            <div className="absolute left-1/2 bottom-[80px] transform -translate-x-1/2 -translate-y-1/10">
-              <div className="text-6xl text-yellow-400 animate-pulse pointer-events-none">
-                {scoreboardData.possession === "A" ? "➡" : "⬅"}
-              </div>
-            </div>
-          )}
         </div>
+
+        {/* Possession Arrow */}
+        {scoreboardData.possession && (
+          <div className="absolute left-1/2 transform -translate-x-1/2 -translate-y-[170px] pointer-events-none">
+            <div className="text-9xl text-yellow-400 animate-pulse">
+              {scoreboardData.possession === "B" ? "⬅" : "➡"}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -30,6 +30,8 @@ class ScoreboardState {
       restTimeLeft: 0,
       restLastUpdate: Date.now(),
       lastUpdate: Date.now(),
+      // overtime duration in milliseconds (default = 5 minutes)
+      overtimeDuration: 300000,
     };
 
     this.loadFromStorage();
@@ -300,7 +302,32 @@ class ScoreboardState {
 
   advanceQuarter() {
     const state = this.getState();
-    if (state.quarter >= state.totalQuarters) return;
+    // If we're at or beyond regulation final quarter:
+    if (state.quarter >= state.totalQuarters) {
+      // If scores are tied -> start an overtime period
+      if ((state.teamAScore || 0) === (state.teamBScore || 0)) {
+        const updates = {
+          quarter: state.quarter + 1,
+          // set overtime length (ms) from setting, default to 5 minutes
+          gameTime: state.overtimeDuration || 300000,
+          shotClock: 24000,
+          teamAFouls: 0,
+          teamBFouls: 0,
+          isRunning: false,
+          isShotRunning: false,
+          isTimeoutActive: false,
+          timeoutTeam: null,
+          timeoutTimeLeft: 0,
+          lastUpdate: Date.now(),
+        };
+        this.updateState(updates);
+        // start rest before overtime (keeps existing behavior)
+        this.startRest(state.restBetweenQuarters);
+        return;
+      }
+      // Not tied — do not advance past regulation (keep existing behavior)
+      return;
+    }
 
     const updates = {
       quarter: state.quarter + 1,
