@@ -29,7 +29,6 @@ export default function ControlScreen() {
   const [tempDefaultGameSeconds, setTempDefaultGameSeconds] = useState(0);
   const [tempTimeoutsPerTeam, setTempTimeoutsPerTeam] = useState(3);
   const [tempTotalQuarters, setTempTotalQuarters] = useState(4);
-  // NEW: overtime minutes + seconds
   const [tempOvertimeMinutes, setTempOvertimeMinutes] = useState(5);
   const [tempOvertimeSeconds, setTempOvertimeSeconds] = useState(0);
 
@@ -241,7 +240,6 @@ export default function ControlScreen() {
     setTempTimeoutsPerTeam(Number(scoreboardData.timeoutsPerTeam ?? 3));
     setTempTotalQuarters(Number(scoreboardData.totalQuarters ?? 4));
 
-    // populate overtime minutes + seconds
     const otMs = scoreboardData.overtimeDuration ?? 300000;
     const otTotal = Math.floor(otMs / 1000);
     setTempOvertimeMinutes(Math.floor(otTotal / 60));
@@ -272,7 +270,6 @@ export default function ControlScreen() {
       defaultGameTime: defTotalSeconds * 1000,
       timeoutsPerTeam: newTimeouts,
       totalQuarters: Number(tempTotalQuarters) || 4,
-      // save overtime duration (minutes+seconds -> ms)
       overtimeDuration: overtimeSecondsTotal * 1000,
     });
     setShowSettings(false);
@@ -336,8 +333,15 @@ export default function ControlScreen() {
     scoreboardState.updateState({ [key]: newScore });
   };
 
-  const setPossession = (team) => {
-    scoreboardState.updateState({ possession: team });
+  // internal possession mapping: "left" -> team B, "right" -> team A
+  const setPossessionBySide = (side) => {
+    const st = scoreboardState.getState();
+    const mapped = side === "left" ? "B" : "A";
+    const newPossession = st.possession === mapped ? null : mapped;
+    scoreboardState.updateState({
+      possession: newPossession,
+      lastUpdate: Date.now(),
+    });
   };
 
   const useTimeout = (team) => {
@@ -411,6 +415,15 @@ export default function ControlScreen() {
     </div>
   );
 
+  // --- helper: getQuarterName ---
+  const getQuarterName = (state) => {
+    const quarter = Number(state?.quarter ?? 1);
+    const total = Number(state?.totalQuarters ?? 4);
+    return quarter > total ? `OT${quarter - total}` : `Q${quarter}`;
+  };
+
+  const quarterName = getQuarterName(scoreboardData);
+
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6">
       {/* Header */}
@@ -425,15 +438,14 @@ export default function ControlScreen() {
             {scoreboardData.teamBName}
           </div>
         </div>
+
         <div className="flex items-center gap-3">
-          <div className="text-center">
-            <div className="text-lg">Quarter</div>
-            <div className="text-2xl font-bold">
-              {scoreboardData.quarter > scoreboardData.totalQuarters
-                ? `OT${scoreboardData.quarter - scoreboardData.totalQuarters}`
-                : `${scoreboardData.quarter} / ${scoreboardData.totalQuarters}`}
-            </div>
+          {/* Quarter display */}
+          <div className="text-center mr-3">
+            <div className="text-sm text-gray-300">Quarter</div>
+            <div className="text-xl font-bold">{quarterName}</div>
           </div>
+
           <div className="flex items-center">
             <audio ref={audioRef} src={timeSound} preload="auto" />
             <button
@@ -444,6 +456,7 @@ export default function ControlScreen() {
               <Bell className="w-5 h-5" /> Buzzer
             </button>
           </div>
+
           <button
             className="p-2 bg-gray-700 rounded hover:bg-gray-600"
             onClick={openSettings}
@@ -519,8 +532,8 @@ export default function ControlScreen() {
         </div>
       )}
 
-      {/* main UI (unchanged structure) */}
-      <div className="flex justify-center gap-8 mb-6">
+      {/* main UI (Game Clock + Shot Clock side-by-side) */}
+      <div className="flex justify-center gap-8 mb-4">
         <div className="bg-gray-800 p-4 rounded-lg text-center">
           <h2 className="text-lg">Game Clock</h2>
           <div className="flex items-center justify-center">
@@ -550,6 +563,7 @@ export default function ControlScreen() {
             {scoreboardData.isRunning ? "Pause" : "Start"}
           </button>
         </div>
+
         <div className="bg-gray-800 p-4 rounded-lg text-center">
           <h2 className="text-lg">Shot Clock</h2>
           <div className="flex items-center justify-center">
@@ -591,7 +605,39 @@ export default function ControlScreen() {
         </div>
       </div>
 
-      {/* team panels */}
+      {/* Possession container centered under the clocks (no labels, no Clear button) */}
+      <div className="flex justify-center mb-6">
+        <div className="bg-gray-800 p-3 rounded-lg shadow-md flex items-center gap-6">
+          <button
+            onClick={() => setPossessionBySide("left")}
+            className={`px-6 py-2 rounded text-3xl ${
+              scoreboardData.possession === "B"
+                ? "bg-yellow-400 text-black"
+                : "bg-gray-700"
+            }`}
+            title="Set possession to LEFT (team on left)"
+          >
+            ⬅
+          </button>
+
+          {/* visual arrow between */}
+          <div className="text-2xl text-gray-400 select-none">⇄</div>
+
+          <button
+            onClick={() => setPossessionBySide("right")}
+            className={`px-6 py-2 rounded text-3xl ${
+              scoreboardData.possession === "A"
+                ? "bg-yellow-400 text-black"
+                : "bg-gray-700"
+            }`}
+            title="Set possession to RIGHT (team on right)"
+          >
+            ➡
+          </button>
+        </div>
+      </div>
+
+      {/* team panels (no per-team possession buttons here) */}
       <div className="grid grid-cols-2 gap-6 mb-6 relative">
         {[
           ["A", scoreboardData.teamAName, scoreboardData.teamAColor],
@@ -672,6 +718,7 @@ export default function ControlScreen() {
               >
                 Use Timeout
               </button>
+
               <div className="flex gap-2">
                 <button
                   className="bg-gray-600 p-2 rounded-full"
@@ -698,10 +745,7 @@ export default function ControlScreen() {
           {!confirmNext ? (
             <button
               onClick={handleNextQuarterClicked}
-              // UPDATED: allow advancing into multiple overtime periods:
-              // enable Next when NOT at final regulation OR when tied (also works for OT)
               disabled={
-                // If at final regulation (or beyond), require a tie to enable next OT
                 scoreboardData.quarter >= scoreboardData.totalQuarters &&
                 (scoreboardData.teamAScore || 0) !==
                   (scoreboardData.teamBScore || 0)
@@ -819,7 +863,7 @@ export default function ControlScreen() {
         </div>
       )}
 
-      {/* settings modal (with Overtime minutes+seconds) */}
+      {/* settings modal (includes overtime inputs) */}
       {showSettings && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
           <div className="bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-md">
@@ -937,7 +981,6 @@ export default function ControlScreen() {
                 </div>
               </div>
 
-              {/* Overtime: minutes + seconds inputs */}
               <div>
                 <label className="block text-sm mb-1">Overtime Duration</label>
                 <div className="flex gap-2">

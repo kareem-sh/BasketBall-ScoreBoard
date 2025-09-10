@@ -381,14 +381,14 @@ export default function DisplayScreen() {
             {scoreboardData.restActive ? (
               <>
                 <div className="text-6xl text-gray-500">REST</div>
-                <div className="text-8xl md:text-[400px] font-extrabold text-blue-600">
+                <div className="text-8xl md:text-[250px] font-extrabold text-blue-600">
                   {formatRestTime(restTime)}
                 </div>
               </>
             ) : (
               <>
                 <div
-                  className={`text-8xl md:text-[400px] font-extrabold ${
+                  className={`text-8xl md:text-[220px] font-extrabold ${
                     gameTime < 60000 ? "text-red-600" : ""
                   }`}
                 >
@@ -413,11 +413,11 @@ export default function DisplayScreen() {
             className="text-center flex flex-col items-center justify-center"
             style={{ color: scoreboardData.teamAColor }}
           >
-            <div className="text-5xl md:text-[170px] font-bold">
+            <div className="text-5xl md:text-[120px] font-bold -mt-[250px]">
               {scoreboardData.teamAName}
             </div>
 
-            <div className="text-[120px] sm:text-[160px] md:text-[220px] lg:text-[330px] font-extrabold leading-none">
+            <div className="text-[120px] sm:text-[160px] md:text-[220px] lg:text-[180px] font-extrabold leading-none">
               {scoreboardData.teamAScore}
             </div>
 
@@ -435,13 +435,13 @@ export default function DisplayScreen() {
           </div>
 
           {/* Shot Clock — always present, BIG, centered between scores */}
-          <div className="flex items-center justify-center -mt-[180px]">
+          <div className="flex items-center justify-center ">
             <div
-              className={`flex items-center justify-center rounded-3xl shadow-2xl px-3 py-5 min-w-[350px]  ${
+              className={`flex items-center justify-center rounded-3xl shadow-2xl px-3 py-5 min-w-[350px] -mt-[100px] ${
                 shotTime < 5000 ? "bg-red-700" : "bg-red-600"
               }`}
             >
-              <div className="text-[170px] sm:text-[160px] md:text-[2500px] lg:text-[330px] font-extrabold text-white leading-none">
+              <div className="text-[170px] sm:text-[160px] md:text-[2500px] lg:text-[150px] font-extrabold text-white leading-none">
                 {formatShotClock(shotTime)}
               </div>
             </div>
@@ -452,11 +452,11 @@ export default function DisplayScreen() {
             className="text-center flex flex-col items-center justify-center"
             style={{ color: scoreboardData.teamBColor }}
           >
-            <div className="text-5xl md:text-[170px] font-bold">
+            <div className="text-5xl md:text-[120px] font-bold -mt-[250px]">
               {scoreboardData.teamBName}
             </div>
 
-            <div className="text-[120px] sm:text-[160px] md:text-[220px] lg:text-[330px] font-extrabold leading-none">
+            <div className="text-[120px] sm:text-[160px] md:text-[220px] lg:text-[180px] font-extrabold leading-none">
               {scoreboardData.teamBScore}
             </div>
 
@@ -476,9 +476,9 @@ export default function DisplayScreen() {
 
         {/* Possession Arrow */}
         {scoreboardData.possession && (
-          <div className="absolute left-1/2 transform -translate-x-1/2 -translate-y-[170px] pointer-events-none">
+          <div className="absolute left-1/2 transform -translate-x-1/2 -translate-y-[120px] pointer-events-none">
             <div className="text-9xl text-yellow-400 animate-pulse">
-              {scoreboardData.possession === "B" ? "⬅" : "➡"}
+              {scoreboardData.possession === "A" ? "⬅" : "➡"}
             </div>
           </div>
         )}
